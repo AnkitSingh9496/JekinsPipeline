@@ -6,21 +6,24 @@ pipeline {
     }
 
     stages {
-        stage('Clone Repository') {
+        stage('Clone Repo') {
             steps {
-                git 'https://github.com/your-username/node-demo.git'
+                echo 'Cloning repo...'
+                git 'https://github.com/AnkitSingh9496/JekinsPipeline.git'
             }
         }
 
         stage('Install Dependencies') {
             steps {
+                echo 'Installing dependencies...'
                 sh 'npm install'
             }
         }
 
         stage('Run App') {
             steps {
-                sh 'npm start &'
+                echo 'Starting app...'
+                sh 'node index.js &'
                 sh 'sleep 5'
             }
         }
