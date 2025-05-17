@@ -14,6 +14,30 @@ pipeline {
     }
 
     stages {
+        stage('Verify Tools') {
+            steps {
+                echo 'Verifying required tools...'
+                powershell '''
+                    $tools = @("docker", "aws", "kubectl")
+                    $missingTools = @()
+                    
+                    foreach ($tool in $tools) {
+                        try {
+                            $null = Get-Command $tool -ErrorAction Stop
+                            Write-Host "$tool is installed"
+                        } catch {
+                            $missingTools += $tool
+                        }
+                    }
+                    
+                    if ($missingTools.Count -gt 0) {
+                        Write-Error "The following required tools are missing: $($missingTools -join ', ')"
+                        Write-Error "Please install the missing tools and ensure they are in the system PATH"
+                        exit 1
+                    }
+                '''
+            }
+        }
 
         stage('Clone Repo') {
             steps {
@@ -25,36 +49,77 @@ pipeline {
         stage('Verify Files') {
             steps {
                 echo 'Checking workspace contents...'
-                sh 'ls -la'
-                sh 'cat package.json || echo "package.json missing!"'
+                powershell 'Get-ChildItem -Force'
+                powershell '''
+                    if (Test-Path package.json) {
+                        Get-Content package.json
+                    } else {
+                        Write-Error "package.json not found!"
+                        exit 1
+                    }
+                '''
             }
         }
 
         stage('Install Dependencies') {
             steps {
                 echo 'Installing Node.js dependencies...'
-                sh 'npm install'
+                powershell 'npm install'
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 echo "Building Docker image ${DOCKER_IMAGE}..."
-                sh "docker build -t ${DOCKER_IMAGE} ."
+                powershell '''
+                    try {
+                        # Get the current directory
+                        $currentDir = Get-Location
+                        Write-Host "Building Docker image from directory: $currentDir"
+                        
+                        # Verify Dockerfile exists
+                        if (-not (Test-Path "Dockerfile")) {
+                            Write-Error "Dockerfile not found in the current directory"
+                            exit 1
+                        }
+                        
+                        # Build the Docker image
+                        docker build -t ${DOCKER_IMAGE} "$currentDir"
+                    } catch {
+                        Write-Error "Failed to build Docker image. Error: $_"
+                        Write-Error "Please ensure Docker is running and you have the necessary permissions"
+                        exit 1
+                    }
+                '''
             }
         }
 
         stage('Login to Amazon ECR') {
             steps {
                 echo 'Authenticating with Amazon ECR...'
-                sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}"
+                powershell '''
+                    try {
+                        aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
+                    } catch {
+                        Write-Error "Failed to authenticate with ECR. Error: $_"
+                        Write-Error "Please ensure AWS credentials are properly configured"
+                        exit 1
+                    }
+                '''
             }
         }
 
         stage('Push Image to ECR') {
             steps {
                 echo 'Pushing Docker image to Amazon ECR...'
-                sh "docker push ${DOCKER_IMAGE}"
+                powershell '''
+                    try {
+                        docker push ${DOCKER_IMAGE}
+                    } catch {
+                        Write-Error "Failed to push Docker image. Error: $_"
+                        exit 1
+                    }
+                '''
             }
         }
 
@@ -62,11 +127,18 @@ pipeline {
             steps {
                 echo 'Deploying to EKS...'
                 script {
-                    // Replace the placeholder in deployment.yaml with the actual image path
-                    sh "sed -i 's|<replace-me-later>|${DOCKER_IMAGE}|' k8s/deployment.yaml"
-
-                    // Apply Kubernetes manifests (make sure deployment.yaml and service.yaml are in k8s/)
-                    sh "kubectl apply -f k8s/"
+                    powershell '''
+                        try {
+                            # Replace the placeholder in deployment.yaml
+                            (Get-Content k8s/deployment.yaml) -replace '<replace-me-later>', '${DOCKER_IMAGE}' | Set-Content k8s/deployment.yaml
+                            
+                            # Apply Kubernetes manifests
+                            kubectl apply -f k8s/
+                        } catch {
+                            Write-Error "Failed to deploy to EKS. Error: $_"
+                            exit 1
+                        }
+                    '''
                 }
             }
         }
